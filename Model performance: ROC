@@ -1,0 +1,42 @@
+rm(list = ls())
+
+library(readr)
+library(pROC)
+
+data_train <- read_csv("data1")
+data_test <- read_csv("data2")
+data_valid1 <- read_csv("data3")
+data_valid2 <- read_csv("data4")
+
+attach(data_train)
+attach(data_test)
+attach(data_valid1)
+attach(data_valid2)
+
+roc_analysis <- function(data, label, predictors) {
+  formula <- as.formula(paste(label, "~", paste(predictors, collapse = "+")))
+  model <- glm(formula, family = binomial(), data = data)
+  data$predvalue <- predict(model, type = "response")
+  roc_curve <- roc(data[[label]], data$predvalue)
+  auc_value <- auc(roc_curve)
+  ci_value <- ci(roc_curve)
+  coords <- coords(roc_curve, "best", ret = c("threshold", "specificity", "sensitivity"))
+  list(AUC = auc_value, CI_Lower = ci_value[1], CI_Upper = ci_value[3], Best_Threshold = coords$threshold, 
+       Specificity = coords$specificity, Sensitivity = coords$sensitivity)
+}
+
+results_train <- roc_analysis(data_train, "label", c("variable1", "variable2", "variable_n"))
+results_test <- roc_analysis(data_test, "label", c("variable1", "variable2", "variable_n"))
+results_valid1 <- roc_analysis(data_valid1, "label", c("variable1", "variable2", "variable_n"))
+results_valid2 <- roc_analysis(data_valid2, "label", c("variable1", "variable2", "variable_n"))
+
+results <- data.frame(
+  Dataset = c("Train", "Test", "Validation1", "Validation2"),
+  AUC = c(results_train$AUC, results_test$AUC, results_valid1$AUC, results_valid2$AUC),
+  CI_Lower = c(results_train$CI_Lower, results_test$CI_Lower, results_valid1$CI_Lower, results_valid2$CI_Lower),
+  CI_Upper = c(results_train$CI_Upper, results_test$CI_Upper, results_valid1$CI_Upper, results_valid2$CI_Upper),
+  Best_Threshold = c(results_train$Best_Threshold, results_test$Best_Threshold, results_valid1$Best_Threshold, results_valid2$Best_Threshold),
+  Specificity = c(results_train$Specificity, results_test$Specificity, results_valid1$Specificity, results_valid2$Specificity),
+  Sensitivity = c(results_train$Sensitivity, results_test$Sensitivity, results_valid1$Sensitivity, results_valid2$Sensitivity)
+)
+write_csv(results, "save path")
