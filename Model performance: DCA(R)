@@ -1,9 +1,5 @@
 rm(list = ls())
 library(readr)
-library(rms)
-library(survival)
-library(ResourceSelection)
-library(pROC)
 library(rmda)
 data_train <- read_csv("data")
 attach(data_train)
@@ -14,7 +10,7 @@ dca_train <- decision_curve(label ~ variables,
                             confidence.intervals = 0.95,
                             study.design = 'cohort')
 plot_decision_curve(dca_train,
-                    curve.names='name',
+                    curve.names='DCA',
                     col="as you wish",
                     lty=1,
                     lwd=5,
