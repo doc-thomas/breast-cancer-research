@@ -1,0 +1,39 @@
+import pandas as pd
+from scipy.stats import shapiro, ttest_ind, mannwhitneyu
+file_path = r'n:\your data\'
+df = pd.read_csv(file_path)
+results = []
+for column in df.columns:
+    if column not in ['file_id', 'label','group']:
+        stat, p_value = shapiro(df[column])
+        normality = 'Normal' if p_value > 0.05 else 'Non-Normal'
+        if normality == 'Normal':
+            group0 = df[df['label'] == 0][column]
+            group1 = df[df['label'] == 1][column]
+            stat_test, p_value_test = ttest_ind(group0, group1)
+            test_used = 't-test'
+        else:
+            group0 = df[df['label'] == 0][column]
+            group1 = df[df['label'] == 1][column]
+            stat_test, p_value_test = mannwhitneyu(group0, group1)
+            test_used = 'Mann-Whitney U test'
+        results.append({
+            'Variable': column,
+            'Normality Test Statistic': stat,
+            'Normality Test P-Value': p_value,
+            'Normality': normality,
+            'Statistical Test': test_used,
+            'Test Statistic': stat_test,
+            'Test P-Value': p_value_test
+        })
+results_df = pd.DataFrame(results)
+output_analysis_path = r'n:\your save path\'
+results_df.to_csv(output_analysis_path, index=False)
+print(f"Analysis results have been saved to: {output_analysis_path}")
+
+high_p_value_vars = results_df[results_df['Test P-Value'] > 0.05]['Variable'].tolist()
+filtered_df = df.drop(columns=high_p_value_vars)
+output_filtered_path = r'n:\your save path\'
+filtered_df.to_csv(output_filtered_path, index=False)
+
+print(f"Filtered data has been saved to: {output_filtered_path}")
