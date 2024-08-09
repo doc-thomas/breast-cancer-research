@@ -1,0 +1,12 @@
+rm(list = ls())
+library(rms)
+data_train <- read_csv("data")
+attach(data_train)
+dd<-datadist(data_train)
+options(datadist='dd')
+fit_train<-lrm(label ~ variables,
+               data=data_train,
+               x=T,
+               y=T)
+cal1<-calibrate(fit_train,method = 'boot',B=1000)
+plot(cal1,xlim=c(0,1.0),ylim=c(0,1.0))
