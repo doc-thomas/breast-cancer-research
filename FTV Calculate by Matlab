@@ -1,1 +1,47 @@
-# For FTV Calculate by Matlab 
+# For FTV Calculate by Matlab R2022b(9.13.0.2049777)
+
+% id = x:x+n;
+subfilename = {'DCE Phase1','DCE Phase2','DCE Phase3','DCE Phasea','roi1','roi2'};
+voxel = [1,1,1]/10;
+dir = 'mat_nov';
+pe = 0:10:200; n_pe = length(pe);
+ser = 0:0.1:2; n_ser= length(ser);
+FTV_a = zeros(2+length(id),n_pe*n_ser);
+FTV_b = zeros(2+length(id),n_pe*n_ser);
+for j = 1:n_pe
+    for k = 1:n_ser
+        FTV_a(1,k+(j-1)*n_pe) = pe(j);
+        FTV_b(1,k+(j-1)*n_pe) = pe(j);
+    end
+end
+for j = 1:n_pe
+    for k = 1:n_ser
+        FTV_a(2,k+(j-1)*n_pe) = ser(k);
+        FTV_b(2,k+(j-1)*n_pe) = ser(k);
+    end
+end
+for i = 1:length(id)
+    a = load([dir,'/',num2str(id(i)),'_a.mat']).model;
+    b = load([dir,'/',num2str(id(i)),'_b.mat']).model;
+    m = load([dir,'/',num2str(id(i)),'_m.mat']).model;
+    l = load([dir,'/',num2str(id(i)),'_l.mat']).model;
+    r1 = load([dir,'/',num2str(id(i)),'_r1.seg.mat']).model;
+    r1 = logical(r1);
+    r2 = load([dir,'/',num2str(id(i)),'_r2.seg.mat']).model;
+    r2 = logical(r2);
+    PE_a = 100*(a(r1)-m(r1))./m(r1);
+    PE_b = 100*(b(r2)-m(r2))./m(r2);
+    SER_a = (a(r1)-m(r1))./(l(r1)-m(r1));
+    SER_b = (b(r2)-m(r2))./(l(r2)-m(r2));   
+    for j = 1:n_pe
+        for k = 1:n_ser
+            FTV_a(i+2,k+(j-1)*n_ser) = length(find(PE_a>pe(j) & SER_a<ser(k)))*voxel(1)*voxel(2)*voxel(3);
+            FTV_b(i+2,k+(j-1)*n_ser) = length(find(PE_b>pe(j) & SER_b<ser(k)))*voxel(1)*voxel(2)*voxel(3);
+        end
+    end
+end
+id = cat(2,[0,0],id');
+FTV_a = cat(2,id',FTV_a); 
+FTV_b = cat(2,id',FTV_b);
+writematrix(FTV_a,'c.csv');
+writematrix(FTV_b,'d.csv');
