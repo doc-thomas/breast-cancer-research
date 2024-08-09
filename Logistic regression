@@ -1,0 +1,70 @@
+For Logistic regression
+import pandas as pd
+import statsmodels.api as sm
+import numpy as np
+
+# Load the dataset
+data_path = r'n:/your data path/'
+data = pd.read_csv(data_path)
+
+# Data preparation
+X = data.drop(columns=['file_id', 'label'])
+y = data['label']
+
+# Function to perform logistic regression and return results
+def logistic_regression_and_summary(features, target):
+    X_const = sm.add_constant(features)
+    model = sm.Logit(target, X_const)
+    result = model.fit(disp=0)
+    
+    summary_data = {
+        "Feature": [],
+        "Coefficient": [],
+        "Intercept": result.params['const'],
+        "Min Value": [],
+        "Max Value": [],
+        "P-value": []
+    }
+    
+    for feature in features.columns:
+        summary_data["Feature"].append(feature)
+        summary_data["Coefficient"].append(result.params[feature])
+        summary_data["Min Value"].append(features[feature].min())
+        summary_data["Max Value"].append(features[feature].max())
+        summary_data["P-value"].append(result.pvalues[feature])
+    
+    summary_df = pd.DataFrame(summary_data)
+    return result, summary_df
+
+# Prepare DataFrame to store all results
+all_results_df = pd.DataFrame()
+
+# Univariate logistic regression
+for col in X.columns:
+    result, summary_df = logistic_regression_and_summary(X[[col]], y)
+    summary_df['Type'] = f'Univariate ({col})'
+    all_results_df = pd.concat([all_results_df, summary_df], ignore_index=True)
+
+# Multivariate logistic regression
+result, summary_df = logistic_regression_and_summary(X, y)
+summary_df['Type'] = 'Multivariate'
+all_results_df = pd.concat([all_results_df, summary_df], ignore_index=True)
+
+# Calculate OR and CI for multivariate model
+params = result.params
+conf = result.conf_int()
+conf['OR'] = params
+conf.columns = ['2.5%', '97.5%', 'OR']
+conf = np.exp(conf)
+conf['P-value'] = result.pvalues
+
+# Add OR and CI to all_results_df for multivariate model
+for feature in X.columns:
+    all_results_df.loc[(all_results_df['Feature'] == feature) & (all_results_df['Type'] == 'Multivariate'), 'OR'] = conf.loc[feature, 'OR']
+    all_results_df.loc[(all_results_df['Feature'] == feature) & (all_results_df['Type'] == 'Multivariate'), 'CI 2.5%'] = conf.loc[feature, '2.5%']
+    all_results_df.loc[(all_results_df['Feature'] == feature) & (all_results_df['Type'] == 'Multivariate'), 'CI 97.5%'] = conf.loc[feature, '97.5%']
+
+# Save the results to a CSV file
+output_path = r'n:/your save path/'
+all_results_df.to_csv(output_path, index=False)
+print(f"Results have been saved to {output_path}")
