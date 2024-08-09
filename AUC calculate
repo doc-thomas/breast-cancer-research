@@ -1,0 +1,18 @@
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
+train_path = r'n:\your data path\'
+train_data = pd.read_csv(train_path)
+X_train = train_data.drop(columns=["label","file_id"])
+y_train = train_data["label"]
+auc_results = pd.DataFrame(columns=["Variable", "AUC"])
+for feature in X_train.columns:
+    model = LogisticRegression(solver='liblinear')
+    model.fit(X_train[[feature]], y_train)
+    y_scores = model.predict_proba(X_train[[feature]])[:, 1]
+    auc_score = roc_auc_score(y_train, y_scores)
+    new_row = pd.DataFrame({"Variable": [feature], "AUC": [auc_score]})
+    auc_results = pd.concat([auc_results, new_row], ignore_index=True)
+print(auc_results)
+auc_output_path = r'n:\your save path\'
+auc_results.to_csv(auc_output_path, index=False)
