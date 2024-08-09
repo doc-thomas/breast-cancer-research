@@ -1,0 +1,23 @@
+import pandas as pd
+import numpy as np
+import pingouin as pg
+
+path1 = r'n:\your data path\'
+data1.to_csv(output_path1, index=False)
+path2 = r'n:\your data path\'
+data2.to_csv(output_path2, index=False)
+data1['dataset'] = 'data1'
+data2['dataset'] = 'data2'
+combined_data = pd.concat([data1, data2])
+combined_data = combined_data.reset_index().rename(columns={'index': 'sample_id'})
+
+icc_results = []
+for column in combined_data.columns:
+    if column not in ['file_id', 'label', 'group', 'dataset', 'sample_id']:  
+        icc = pg.intraclass_corr(data=combined_data, targets='sample_id', raters='dataset', ratings=column)
+        icc_single_absolute = icc[icc['Type'] == 'ICC1']  
+        icc_single_absolute['Variable'] = column
+        icc_results.append(icc_single_absolute)
+icc_df = pd.concat(icc_results, ignore_index=True)
+output_path_icc = r'E:\Doctor\20240718_ftv\hp\icc\hp_ftv_a_valid2_icc_results.csv'
+icc_df.to_csv(output_path_icc, index=False)
