@@ -1,0 +1,44 @@
+import pandas as pd
+import numpy as np
+from scipy.stats import pearsonr, spearmanr, pointbiserialr
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+file_path = r'n:\your data path\'
+df = pd.read_csv(file_path)
+correlation_results = {}
+for column in df.columns:
+    if column not in ['file_id', 'label','group']:
+        pearson_corr, pearson_p_value = pearsonr(df[column], df['label'])
+        if pearson_p_value < 0.05:
+            pb_corr, _ = pointbiserialr(df['label'], df[column])
+            correlation_results[column] = {
+                'method': 'Point-Biserial',
+                'correlation': pb_corr
+            }
+        else:
+            spearman_corr, _ = spearmanr(df[column], df['label'])
+            correlation_results[column] = {
+                'method': 'Spearman',
+                'correlation': spearman_corr
+            }
+correlation_df = pd.DataFrame.from_dict(correlation_results, orient='index')
+correlation_df = correlation_df.sort_values(by='correlation', key=abs, ascending=False)
+unique_correlations = {}
+for corr_value, group in correlation_df.groupby('correlation'):
+    min_var = group.index.min()
+    unique_correlations[min_var] = group.loc[min_var]
+filtered_correlation_df = pd.DataFrame.from_dict(unique_correlations, orient='index')
+filtered_correlation_df = filtered_correlation_df[filtered_correlation_df['correlation'].abs() > 0.3]
+selected_vars = filtered_correlation_df.index.tolist()
+selected_df = df[['file_id', 'label'] + selected_vars]
+output_vars_path = r'n:\your save path\'
+selected_df.to_csv(output_vars_path, index=False)
+output_correlation_path =  r'n:\your save path\'
+filtered_correlation_df.to_csv(output_correlation_path, index_label='Variable')
+print(f"Selected variables have been saved to: {output_vars_path}")
+print(f"Correlation coefficients have been saved to: {output_correlation_path}")
+max_correlation = filtered_correlation_df['correlation'].max()
+min_correlation = filtered_correlation_df['correlation'].min()
+print(f"Maximum correlation: {max_correlation}")
+print(f"Minimum correlation: {min_correlation}")
