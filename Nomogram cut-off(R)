@@ -1,0 +1,25 @@
+rm(list = ls())
+library(readr)
+library(pROC)
+data_train <- read_csv("data")
+attach(data_train)
+model_train <- glm(label ~ Nomogram.score,
+                  family = binomial(),
+                  data = data_train)
+data_train$predvalue <- predict(model_train, type = "response")
+ROC_train <- roc(data_train$label, data_train$Nomogram.score)
+auc_train <- auc(ROC_train)
+ci_train <- ci(auc_train)
+youden_index <- ROC_train$sensitivities + ROC_train$specificities - 1
+best_cutoff <- ROC_train$thresholds[which.max(youden_index)]
+best_sensitivity <- ROC_train$sensitivities[which.max(youden_index)]
+best_specificity <- ROC_train$specificities[which.max(youden_index)]
+plot(ROC_train, 
+     print.auc = FALSE, auc.polygon = FALSE, lwd = 5, max.auc.ploygon = TRUE,
+     print.thres = FALSE, main = "ROC CURVE", col = "#as you wish", identity.col = "darkgrey", 
+     identity.lty = 3, identity.lwd = 5,
+     legacy.axes = TRUE)
+points(best_specificity, best_sensitivity, col = "#Fas you wish", pch = 15, cex = 1.5)
+text(best_specificity, best_sensitivity, 
+     labels = paste(round(best_cutoff, 3)), 
+     pos = 3, offset = 1.5, col = "#as you wish", cex = 1.5)
