@@ -1,0 +1,53 @@
+rm(list = ls())
+
+library(readr)
+library(pROC)
+
+data_train <- read_csv("your data")
+
+attach(data_train)
+
+roc_analysis <- function(data, label, predictors) {
+  formula <- as.formula(paste(label, "~", paste(predictors, collapse = "+")))
+  model <- glm(formula, family = binomial(), data = data)
+  data$predvalue <- predict(model, type = "response")
+  roc_curve <- roc(data[[label]], data$predvalue)
+  auc_value <- auc(roc_curve)
+  ci_value <- ci(roc_curve)
+  coords <- coords(roc_curve, "best", ret = c("threshold", "specificity", "sensitivity"))
+  cutoff <- coords$threshold[which.max(coords$sensitivity + coords$specificity - 1)]
+  predictions <- ifelse(data$predvalue > cutoff, 1, 0)
+  confusion <- table(Predicted = predictions, Actual = data[[label]])
+  accuracy <- sum(diag(confusion)) / sum(confusion)
+  precision <- confusion[2,2] / sum(confusion[2,])
+  recall <- confusion[2,2] / sum(confusion[,2])
+  f1_score <- 2 * precision * recall / (precision + recall)
+  ppv <- precision  # Positive Predictive Value
+  npv <- confusion[1,1] / sum(confusion[1,])
+  error_rate <- sum(predictions != data[[label]]) / length(predictions)
+  list(AUC = auc_value, CI_Lower = ci_value[1], CI_Upper = ci_value[3], Best_Threshold = cutoff,
+       Specificity = coords$specificity[which.max(coords$sensitivity + coords$specificity - 1)],
+       Sensitivity = coords$sensitivity[which.max(coords$sensitivity + coords$specificity - 1)],
+       Precision = precision, Recall = recall, F1_Score = f1_score, PPV = ppv, NPV = npv,
+       Accuracy = accuracy, Error_Rate = error_rate)
+}
+
+results_train <- roc_analysis(data_train, "label", c("v42", "v10", "ratio_b"))
+
+results <- data.frame(
+  Dataset = c("Train", "Test", "Validation1", "Validation2"),
+  AUC = c(results_train$AUC, results_test$AUC, results_valid1$AUC, results_valid2$AUC),
+  CI_Lower = c(results_train$CI_Lower, results_test$CI_Lower, results_valid1$CI_Lower, results_valid2$CI_Lower),
+  CI_Upper = c(results_train$CI_Upper, results_test$CI_Upper, results_valid1$CI_Upper, results_valid2$CI_Upper),
+  Best_Threshold = c(results_train$Best_Threshold, results_test$Best_Threshold, results_valid1$Best_Threshold, results_valid2$Best_Threshold),
+  Specificity = c(results_train$Specificity, results_test$Specificity, results_valid1$Specificity, results_valid2$Specificity),
+  Sensitivity = c(results_train$Sensitivity, results_test$Sensitivity, results_valid1$Sensitivity, results_valid2$Sensitivity),
+  Precision = c(results_train$Precision, results_test$Precision, results_valid1$Precision, results_valid2$Precision),
+  Recall = c(results_train$Recall, results_test$Recall, results_valid1$Recall, results_valid2$Recall),
+  F1_Score = c(results_train$F1_Score, results_test$F1_Score, results_valid1$F1_Score, results_valid2$F1_Score),
+  PPV = c(results_train$PPV, results_test$PPV, results_valid1$PPV, results_valid2$PPV),
+  NPV = c(results_train$NPV, results_test$NPV, results_valid1$NPV, results_valid2$NPV),
+  Accuracy = c(results_train$Accuracy, results_test$Accuracy, results_valid1$Accuracy, results_valid2$Accuracy),
+  Error_Rate = c(results_train$Error_Rate, results_test$Error_Rate, results_valid1$Error_Rate, results_valid2$Error_Rate)
+)
+write_csv(results, "your path")
