@@ -1,0 +1,160 @@
+# ==============================================================================
+# Integrated Bioinformatics Pipeline: WGCNA, Enrichment, Plotting, and ssGSEA
+# Target: Transcriptomics & Radiomics Integration
+# ==============================================================================
+
+# 1. Environment & Library Loading
+rm(list = ls())
+options(stringsAsFactors = FALSE)
+
+library(WGCNA)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(GSVA)
+
+# Fix conflict: Force cor to use WGCNA version
+cor <- WGCNA::cor
+enableWGCNAThreads()
+
+# ------------------------------------------------------------------------------
+# Module 1: WGCNA (Network Construction & Trait Correlation)
+# ------------------------------------------------------------------------------
+
+# Load Data
+# datExpr: Row=Samples, Col=Genes (Standardized)
+# datTraits: Row=Samples, Col=Numeric traits
+datExpr <- read.csv("Expression_Matrix.csv", row.names = 1)
+datTraits <- read.csv("Traits_Matrix.csv", row.names = 1)
+datTraits <- datTraits[rownames(datExpr), ]
+
+# Data Quality Control
+gsg <- goodSamplesGenes(datExpr, verbose = 3)
+if (!gsg$allOK) {
+  datExpr <- datExpr[gsg$goodSamples, gsg$goodGenes]
+}
+
+# Soft Threshold Selection
+powers <- c(c(1:10), seq(from = 12, to = 20, by = 2))
+sft <- pickSoftThreshold(datExpr, powerVector = powers, networkType = "signed", verbose = 5)
+softPower <- ifelse(is.na(sft$powerEstimate), 12, sft$powerEstimate)
+
+# Network Construction
+net <- blockwiseModules(datExpr, 
+                        power = softPower,
+                        networkType = "signed",
+                        TOMType = "signed",
+                        corType = "bicor",
+                        maxPOutliers = 0.05,
+                        minModuleSize = 30,
+                        mergeCutHeight = 0.25,
+                        numericLabels = TRUE, 
+                        saveTOMs = TRUE, 
+                        maxBlockSize = 25000)
+
+mergedColors <- labels2colors(net$colors)
+MEs0 <- moduleEigengenes(datExpr, mergedColors)$eigengenes
+MEs <- orderMEs(MEs0)
+
+# Trait Correlation
+moduleTraitCor <- WGCNA::cor(MEs, datTraits, use = "p", method = "spearman")
+moduleTraitPvalue <- corPvalueStudent(moduleTraitCor, nrow(datExpr))
+
+# Save results
+save(net, mergedColors, softPower, datExpr, datTraits, MEs, 
+     moduleTraitCor, moduleTraitPvalue, file = "WGCNA_Full_Results.RData")
+
+# ------------------------------------------------------------------------------
+# Module 2: Functional Enrichment (GO & KEGG)
+# ------------------------------------------------------------------------------
+
+# Define modules of interest (example: green and brown)
+modules_to_analyze <- c("green", "brown")
+
+for (mod in modules_to_analyze) {
+  # Extract genes
+  module_genes <- colnames(datExpr)[mergedColors == mod]
+  
+  # ID Conversion
+  entrez_ids <- bitr(module_genes, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
+  
+  # GO Enrichment
+  go_res <- enrichGO(gene = entrez_ids$ENTREZID, OrgDb = org.Hs.eg.db, ont = "ALL", 
+                     pvalueCutoff = 0.05, qvalueCutoff = 0.2, readable = TRUE)
+  
+  # KEGG Enrichment
+  kegg_res <- enrichKEGG(gene = entrez_ids$ENTREZID, organism = 'hsa', 
+                         pvalueCutoff = 0.05, qvalueCutoff = 0.2)
+  kegg_res <- setReadable(kegg_res, OrgDb = org.Hs.eg.db, keyType = "ENTREZID")
+  
+  write.csv(as.data.frame(go_res), paste0("GO_ME", mod, ".csv"), row.names=FALSE)
+  write.csv(as.data.frame(kegg_res), paste0("KEGG_ME", mod, ".csv"), row.names=FALSE)
+}
+
+# ------------------------------------------------------------------------------
+# Module 3: Visualization (Combined Dotplots)
+# ------------------------------------------------------------------------------
+
+# Define target pathways for visualization
+target_pathways <- c(
+  "aerobic electron transport chain",
+  "ATP synthesis coupled electron transport",
+  "Non-alcoholic fatty liver disease",
+  "Prion disease",
+  "Motor proteins",
+  "Cul3-RING ubiquitin ligase complex",
+  "ubiquitin ligase complex"
+)
+
+plot_enrichment <- function(go_file, kegg_file, module_name) {
+  go_df <- read.csv(go_file) %>% mutate(Source = "GO")
+  kegg_df <- read.csv(kegg_file) %>% mutate(Source = "KEGG")
+  
+  combined <- bind_rows(go_df, kegg_df) %>%
+    filter(Description %in% target_pathways & p.adjust < 0.05) %>%
+    mutate(
+      GeneRatio_num = sapply(strsplit(as.character(GeneRatio), "/"), function(x) as.numeric(x[1])/as.numeric(x[2])),
+      Module = module_name
+    ) %>%
+    arrange(desc(Source), GeneRatio_num)
+  
+  if(nrow(combined) == 0) return(NULL)
+  
+  combined$Description <- factor(combined$Description, levels = unique(combined$Description))
+  
+  ggplot(combined, aes(x = GeneRatio_num, y = Description)) +
+    geom_point(aes(size = Count, color = p.adjust, shape = Source), alpha = 0.85) +
+    scale_shape_manual(values = c("GO" = 16, "KEGG" = 15)) +
+    scale_color_gradient(low = "#D85959", high = "#58B3CC") +
+    scale_y_discrete(labels = function(x) str_wrap(x, width = 45)) +
+    theme_bw() +
+    labs(title = paste("Enriched Pathways:", module_name), x = "GeneRatio", y = "")
+}
+
+# ------------------------------------------------------------------------------
+# Module 4: Pathway Scoring (ssGSEA)
+# ------------------------------------------------------------------------------
+
+# Build Gene Sets from enrichment results
+all_enrich_files <- list.files(pattern = "^(GO|KEGG)_ME.*\\.csv")
+all_enrich_data <- bind_rows(lapply(all_enrich_files, read.csv))
+
+custom_gene_sets <- list()
+for(path in target_pathways) {
+  subset_data <- all_enrich_data %>% filter(Description == path)
+  if(nrow(subset_data) > 0) {
+    custom_gene_sets[[path]] <- strsplit(subset_data$geneID[1], "/")[[1]]
+  }
+}
+
+# Run ssGSEA
+# expr_mat: Row=Genes, Col=Samples
+expr_df <- read.csv("Expression_Matrix_Full.csv", row.names = 1, check.names = FALSE)
+expr_mat <- if(grepl("^D", rownames(expr_df)[1])) t(expr_df) else as.matrix(expr_df)
+
+ssgsea_par <- ssgseaParam(exprData = expr_mat, geneSets = custom_gene_sets)
+ssgsea_res <- gsva(ssgsea_par)
+
+write.csv(t(ssgsea_res), "Custom_Pathways_ssGSEA_Scores.csv", quote = FALSE)
