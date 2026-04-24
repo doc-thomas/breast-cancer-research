@@ -1,0 +1,101 @@
+import os
+import argparse
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+def get_args():
+    """Defines command-line arguments for data preparation."""
+    parser = argparse.ArgumentParser(description="Multi-center Data Preparation for Modeling")
+    
+    # Path settings
+    parser.add_argument('--input_csv', type=str, required=True, help='Path to the merged features CSV file')
+    parser.add_argument('--output_dir', type=str, default='./processed_data', help='Directory to save split datasets')
+    
+    # Column identifiers
+    parser.add_argument('--target', type=str, required=True, help='Name of the target/label column')
+    parser.add_argument('--center_col', type=str, default='Center', help='Column name identifying different centers')
+    parser.add_argument('--id_col', type=str, default='PatientID', help='Column name for unique patient IDs')
+    
+    # Hyperparameters
+    parser.add_argument('--test_size', type=float, default=0.3, help='Proportion of the test set (e.g., 0.3)')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    
+    return parser.parse_args()
+
+def clean_features(df, id_col, target_col, center_col):
+    """Removes non-feature columns and handles missing values."""
+    # Identify feature columns (excluding IDs, labels, and center info)
+    non_features = [id_col, target_col, center_col]
+    features = [c for c in df.columns if c not in non_features]
+    
+    # Initial cleaning: Remove columns with constant values
+    df_clean = df.loc[:, df[features].nunique() > 1]
+    
+    # Handle missing values (e.g., fill with median)
+    new_features = [c for c in df_clean.columns if c in features]
+    df_clean[new_features] = df_clean[new_features].fillna(df_clean[new_features].median())
+    
+    return df_clean, new_features
+
+def split_and_standardize(df, features, target_col, test_size, seed):
+    """Splits data and applies Z-score scaling based on training statistics."""
+    X = df[features]
+    y = df[target_col]
+    
+    # Stratified split to maintain label distribution
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=seed, stratify=y
+    )
+    
+    # Fit scaler ONLY on training data to avoid data leakage
+    scaler = StandardScaler()
+    X_train_scaled = pd.DataFrame(
+        scaler.fit_transform(X_train), 
+        columns=features, 
+        index=X_train.index
+    )
+    
+    # Apply the same scaling to test data
+    X_test_scaled = pd.DataFrame(
+        scaler.transform(X_test), 
+        columns=features, 
+        index=X_test.index
+    )
+    
+    return X_train_scaled, X_test_scaled, y_train, y_test
+
+def main():
+    args = get_args()
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # 1. Load Data
+    print(f"Loading data from: {args.input_csv}")
+    df = pd.read_csv(args.input_csv)
+    
+    # 2. Feature Cleaning
+    print("Cleaning feature set...")
+    df_cleaned, feature_names = clean_features(df, args.id_col, args.target, args.center_col)
+    
+    # 3. Process each center or perform multi-center split
+    # (Example: Treating all data as one cohort then splitting)
+    X_train, X_test, y_train, y_test = split_and_standardize(
+        df_cleaned, feature_names, args.target, args.test_size, args.seed
+    )
+    
+    # 4. Save results
+    print(f"Saving processed datasets to {args.output_dir}...")
+    X_train.to_csv(os.path.join(args.output_dir, 'X_train_scaled.csv'))
+    X_test.to_csv(os.path.join(args.output_dir, 'X_test_scaled.csv'))
+    y_train.to_csv(os.path.join(args.output_dir, 'y_train.csv'))
+    y_test.to_csv(os.path.join(args.output_dir, 'y_test.csv'))
+    
+    print("-" * 30)
+    print(f"Preparation Complete.")
+    print(f"Total features: {len(feature_names)}")
+    print(f"Training samples: {len(X_train)}")
+    print(f"Test samples: {len(X_test)}")
+
+if __name__ == "__main__":
+    main()
