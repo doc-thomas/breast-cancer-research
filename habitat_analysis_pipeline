@@ -1,0 +1,180 @@
+import os
+import glob
+import time
+import argparse
+import numpy as np
+import pandas as pd
+import SimpleITK as sitk
+from multiprocessing import Pool
+from datetime import datetime
+
+# Configure Matplotlib for headless server environments
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+from skimage.segmentation import slic
+from radiomics import featureextractor
+
+def get_args():
+    """Defines command-line arguments for portability."""
+    parser = argparse.ArgumentParser(description="Medical Imaging Habitat Analysis Pipeline")
+    
+    # Path configurations
+    parser.add_argument('--input_images', type=str, required=True, help='Path to image directory (.nii.gz)')
+    parser.add_argument('--input_masks', type=str, required=True, help='Path to mask directory (.nii.gz)')
+    parser.add_argument('--output_dir', type=str, default='./output', help='Root directory for results')
+    
+    # Algorithm parameters
+    parser.add_argument('--voxel_count', type=int, default=300, help='Target voxels per sub-region')
+    parser.add_argument('--min_segments', type=int, default=20, help='Minimum segments per ROI')
+    parser.add_argument('--max_segments', type=int, default=100, help='Maximum segments per ROI')
+    parser.add_argument('--compactness', type=float, default=15.0, help='SLIC compactness parameter')
+    parser.add_argument('--cores', type=int, default=4, help='Number of CPU cores for parallel processing')
+    
+    return parser.parse_args()
+
+def setup_directories(root):
+    """Creates a structured output hierarchy."""
+    dirs = {
+        'tumor_label': os.path.join(root, 'tumor/labels'),
+        'peri_label':  os.path.join(root, 'peritumoral/labels'),
+        'peri_roi':    os.path.join(root, 'peritumoral/rois'),
+    }
+    for path in dirs.values():
+        os.makedirs(path, exist_ok=True)
+    return dirs
+
+def resample_and_normalize(image, mask, target_spacing=[1.0, 1.0, 1.0]):
+    """Standardizes image resolution and intensity."""
+    # Resampling logic
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetOutputSpacing(target_spacing)
+    new_size = [int(round(s * (sp / ts))) for s, sp, ts in zip(image.GetSize(), image.GetSpacing(), target_spacing)]
+    resampler.SetSize(new_size)
+    resampler.SetOutputDirection(image.GetDirection())
+    resampler.SetOutputOrigin(image.GetOrigin())
+    
+    resampler.SetInterpolator(sitk.sitkBSpline)
+    img_res = resampler.Execute(image)
+    
+    resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+    mask_res = resampler.Execute(mask)
+    
+    # Robust Z-Score Normalization
+    img_arr = sitk.GetArrayFromImage(img_res)
+    foreground = (img_arr > np.percentile(img_arr, 5)).astype(np.uint8)
+    valid_data = img_arr[foreground > 0]
+    
+    if len(valid_data) > 0:
+        mean, std = np.mean(valid_data), np.std(valid_data)
+        img_arr = (img_arr - mean) / (std if std > 0 else 1)
+        
+    img_norm = sitk.GetImageFromArray(img_arr)
+    img_norm.CopyInformation(img_res)
+    return img_norm, mask_res, foreground
+
+def generate_peri_masks(mask_sitk, body_mask_arr):
+    """Generates peritumoral ring ROIs (3mm, 5mm, 7mm)."""
+    tumor_arr = (sitk.GetArrayFromImage(mask_sitk) > 0).astype(np.uint8)
+    
+    def get_dilated(mm):
+        dist_filter = sitk.BinaryDilateImageFilter()
+        dist_filter.SetKernelRadius(mm)
+        dilated = sitk.GetArrayFromImage(dist_filter.Execute(mask_sitk))
+        return (dilated * body_mask_arr).astype(np.uint8)
+
+    d3, d5, d7 = get_dilated(3), get_dilated(5), get_dilated(7)
+    return {
+        'Tumor': tumor_arr,
+        'mX': ((dX - tumor_arr) > 0).astype(np.uint8),
+        'mY': ((dY - dX) > 0).astype(np.uint8),
+        'mZ': ((dZ - dY) > 0).astype(np.uint8)
+    }
+
+def run_pipeline_per_case(args_tuple):
+    """Integrated SLIC and Radiomics extraction for a single case."""
+    img_path, mask_path, args, dirs = args_tuple
+    case_id = os.path.basename(img_path).split('.')[0]
+    
+    try:
+        # Load and Preprocess
+        img_raw = sitk.ReadImage(img_path)
+        mask_raw = sitk.ReadImage(mask_path)
+        img_norm, mask_res, body_arr = resample_and_normalize(img_raw, mask_raw)
+        img_arr = sitk.GetArrayFromImage(img_norm)
+        
+        # Region Generation
+        regions = generate_peri_masks(mask_res, body_arr)
+        
+        # Radiomics Extractor Setup
+        extractor = featureextractor.RadiomicsFeatureExtractor(binWidth=0.25, sigma=[1], normalize=False)
+        extractor.disableAllFeatures()
+        extractor.enableFeatureClassByName('firstorder')
+        extractor.enableFeatureClassByName('glcm')
+        
+        results = []
+        for name, mask_arr in regions.items():
+            roi_vol = np.sum(mask_arr)
+            if roi_vol < 50: continue # Skip tiny ROIs
+            
+            # SLIC Segmentation
+            n_seg = min(max(args.min_segments, int(roi_vol / args.voxel_count)), args.max_segments)
+            labels = slic(img_arr, n_segments=n_seg, compactness=args.compactness, 
+                          mask=mask_arr, spacing=[1.0, 1.0, 1.0], start_label=1)
+            
+            # Save Labels
+            label_sitk = sitk.GetImageFromArray(labels.astype(np.uint16))
+            label_sitk.CopyInformation(img_norm)
+            out_path = os.path.join(dirs['tumor_label'] if name == 'Tumor' else dirs['peri_label'], 
+                                    f"{case_id}_{name}_label.nii.gz")
+            sitk.WriteImage(label_sitk, out_path)
+            
+            # Feature Extraction
+            unique_ids = np.unique(labels[labels > 0])
+            for sid in unique_ids:
+                try:
+                    feat = extractor.execute(img_norm, label_sitk, label=int(sid))
+                    row = {'CaseID': case_id, 'Region': name, 'SubregionID': sid}
+                    row.update({k: v for k, v in feat.items() if k.startswith('original_')})
+                    results.append(row)
+                except: continue
+                
+        return results
+    except Exception as e:
+        print(f"Error processing {case_id}: {str(e)}")
+        return None
+
+def main():
+    args = get_args()
+    dirs = setup_directories(args.output_dir)
+    
+    img_files = glob.glob(os.path.join(args.input_images, '*.nii*'))
+    task_list = []
+    for img_p in img_files:
+        case_name = os.path.basename(img_p).split('.')[0]
+        mask_p = os.path.join(args.input_masks, f"{case_name}.nii.gz")
+        if os.path.exists(mask_p):
+            task_list.append((img_p, mask_p, args, dirs))
+
+    print(f"Starting analysis on {len(task_list)} cases using {args.cores} cores...")
+    
+    all_features = []
+    start_time = time.time()
+    
+    with Pool(args.cores) as pool:
+        for i, res in enumerate(pool.imap_unordered(run_pipeline_per_case, task_list), 1):
+            if res: all_features.extend(res)
+            if i % 5 == 0:
+                print(f"Progress: {i}/{len(task_list)} cases completed.")
+
+    if all_features:
+        df = pd.DataFrame(all_features)
+        csv_name = f"features_export_{datetime.now().strftime('%Y%m%d')}.csv"
+        df.to_csv(os.path.join(args.output_dir, csv_name), index=False)
+        print(f"Success. Features saved to {csv_name}")
+    
+    print(f"Total Runtime: {(time.time() - start_time)/60:.2f} minutes")
+
+if __name__ == "__main__":
+    main()
