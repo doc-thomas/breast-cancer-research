@@ -1,0 +1,86 @@
+import os
+import subprocess
+import time
+import argparse
+from datetime import datetime
+
+# ================= CONFIGURATION =================
+# Replace these default values as needed
+DEFAULT_TASK_ID = "001"
+DEFAULT_CONFIG = "3d_fullres"
+DEFAULT_TRAINER = "nnUNetTrainer"
+DEFAULT_GPU_ID = "0"
+# =================================================
+
+def run_command(cmd):
+    """Executes system command and logs output in real-time."""
+    print(f"Executing: {cmd}")
+    
+    start_time = time.time()
+    
+    process = subprocess.Popen(
+        cmd,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+    
+    for line in process.stdout:
+        print(line, end='')
+    
+    process.wait()
+    
+    end_time = time.time()
+    duration = (end_time - start_time) / 3600
+    print(f"\nFold Duration: {duration:.2f} hours")
+    
+    return process.returncode
+
+def main():
+    parser = argparse.ArgumentParser(description="nnU-Net Training Launcher")
+    
+    parser.add_argument('-t', '--task', type=str, default=DEFAULT_TASK_ID, 
+                        help='Task ID (e.g., 001)')
+    parser.add_argument('-f', '--fold', type=int, default=0, 
+                        help='Fold index to run')
+    parser.add_argument('-tr', '--trainer', type=str, default=DEFAULT_TRAINER, 
+                        help='Trainer class name')
+    parser.add_argument('-c', '--config', type=str, default=DEFAULT_CONFIG, 
+                        help='nnU-Net configuration (e.g., 2d, 3d_fullres)')
+    parser.add_argument('--reset', action='store_true', 
+                        help='Start training from scratch (disable auto-continue)')
+    parser.add_argument('--gpu', type=str, default=DEFAULT_GPU_ID, 
+                        help='GPU ID to use')
+    
+    args = parser.parse_args()
+
+    print(f"Training Session Started")
+    print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Task:      {args.task}")
+    print(f"Config:    {args.config}")
+    print(f"Trainer:   {args.trainer}")
+    print(f"Fold:      {args.fold}")
+    print(f"Mode:      {'Reset' if args.reset else 'Continue'}")
+    print("-" * 50)
+
+    # Set environment variables
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+    # Construct nnU-Net v2 command
+    # Added --npz for potential validation requirements
+    cmd = f"nnUNetv2_train {args.task} {args.config} {args.fold} -tr {args.trainer} --npz"
+    
+    if not args.reset:
+        cmd += " --c"
+
+    ret_code = run_command(cmd)
+    
+    if ret_code != 0:
+        print(f"\nTraining failed with exit code: {ret_code}")
+    else:
+        print(f"\nTraining completed successfully.")
+
+if __name__ == "__main__":
+    main()
